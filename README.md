@@ -44,8 +44,8 @@ User supplies lock's name
 
 ```
 clone remote to random-generated dir -> test -f XXX.lock -> fail if exist
-                                        +-----------------> success if not exist -> add file (write uid to content) -> commit -> push -> fail -> pull --rebase -> success -> try push again (recursive)
-                                                                                                                                 |               +--------------> conflict -> fail
+                                        +-----------------> success if not exist -> add file (write uid to content) -> commit -> push -> fail -> pull --rebase -> success -> try push again (recursive),
+                                                                                                                                 |               +--------------> conflict -> fail (lock acquired by others)
                                                                                                                                  +-----> success
 ```
 

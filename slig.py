@@ -6,6 +6,7 @@ import subprocess
 import shlex
 import pathlib
 import configparser
+import uuid as u
 
 
 REPO_CONFIG_FILENAME = "slig.ini"
@@ -18,18 +19,6 @@ def file_exist(path):
 def lock_file_check(path, uuid):
     pass
 
-
-class RepoConfig():
-    def __init__(self):
-        self.config = configparser.ConfigParser()
-
-    def load(self, repo_path):
-        # TODO:
-        pass
-
-    def save(self, repo_path):
-        # TODO:
-        pass
 
 class GitError(RuntimeError):
     def __init__(self, returncode, stderr):
@@ -45,17 +34,21 @@ class ClonedGitRepo:
 
         parent_dir = tempfile.mkdtemp()
         clone_result = subprocess.run(["git"] + git_options + ["clone", remote], cwd=parent_dir, capture_output=True)
-        print(clone_result.stderr.decode(sys.stderr.encoding), file=sys.stderr)  # write stderr of git to stderr
+        decoded_stderr = clone_result.stderr.decode(sys.stderr.encoding)
+        print(decoded_stderr, file=sys.stderr)  # write stderr of git to stderr
         if clone_result.returncode == 0:
+            # find cloned repository in parent_dir
             subdirs = list(pathlib.Path(parent_dir).iterdir())
             if len(subdirs) == 1:
                 self.name = subdirs[0].name
                 self.path = pathlib.Path(parent_dir) / self.name
-                print(self.path)
+                print("DEBUG:", self.path)
             else:
-                raise RuntimeError("Cannot find cloned repository at {}".format(parent_dir))
+                print("Error finding cloned repository in {}".format(parent_dir), file=sys.stderr)
+                sys.exit(1)
         else:
-            raise RuntimeError('Cannot clone remote repository "{}" with git options {}'.format(remote, git_options))
+            print("Git process exited with code {}".format(clone_result.returncode), file=sys.stderr)
+            sys.exit(1)
 
     def _call_git_command(self, commands):
         result = subprocess.run(["git"] + self._git_options + commands, cwd=self.path, capture_output=True)
@@ -67,6 +60,34 @@ class ClonedGitRepo:
         (returncode, decoded_stderr) = self._call_git_command(commands)
         if returncode != 0:
             raise GitError(returncode, decoded_stderr)
+
+    def _sync_check_conflict(self):
+        # push -> pull --rebase -> push
+        # the first push is for speedup
+
+        MAX_RETRY = 3
+
+        ret_code, _ = self._call_git_command(["push"])
+        if ret_code == 0:
+            # push successful
+            return True
+        else:
+            retry_cnt = 0
+            while retry_cnt < MAX_RETRY:
+                retry_cnt += 1
+                try:
+                    self._call_git_command_raise(["pull", "--rebase"])
+                except GitError:
+                    # pull conflict: lock acquired by others
+                    return False
+
+                try:
+                    self._call_git_command_raise(["push"])
+                    return True
+                except GitError:
+                    return False
+
+            return False
 
     def initialize(self):
         "Create slig.in and push it into remote repository"
@@ -82,13 +103,11 @@ class ClonedGitRepo:
                 config.write(file)
 
             self._call_git_command_raise(["add", REPO_CONFIG_FILENAME])
-            self._call_git_command_raise(["commit", "-m", "'initialize slig repository"])
+            self._call_git_command_raise(["commit", "-m", "initialize slig repository"])
             self._call_git_command_raise(["push"])
         except GitError as e:
             print(e, file=sys.stderr)
-            print(e.stderr, file=sys.stderr)
-        except Exception as e:
-            print(e, file=sys.stderr)
+            sys.exit(1)
 
     def add_lock(self, lock_name):
         config = configparser.ConfigParser()
@@ -108,13 +127,11 @@ class ClonedGitRepo:
 
             self._call_git_command_raise(["add", REPO_CONFIG_FILENAME])
             # TODO: currently only simple lock is supported
-            self._call_git_command_raise(["commit", "-m", "'add {} lock: {}".format("simple", lock_name)])
+            self._call_git_command_raise(["commit", "-m", "add {} lock: {}".format("simple", lock_name)])
             self._call_git_command_raise(["push"])
         except GitError as e:
             print(e, file=sys.stderr)
-            print(e.stderr, file=sys.stderr)
-        except Exception as e:
-            print(e, file=sys.stderr)
+            sys.exit(1)
 
     def remove_lock(self, lock_name):
         config = configparser.ConfigParser()
@@ -125,7 +142,7 @@ class ClonedGitRepo:
                 sys.exit(1)
 
             # check if lock is in use
-            if lock_name in list(pathlib.Path(self.path).iterdir()):
+            if lock_name in map(lambda x: x.name, pathlib.Path(self.path).iterdir()):
                 print("Failed to remove lock {} which is currently acquired. Release it before removing."
                         .format(lock_name), file=sys.stderr)
                 sys.exit(1)
@@ -135,18 +152,49 @@ class ClonedGitRepo:
                 config.write(file)
 
             self._call_git_command_raise(["add", REPO_CONFIG_FILENAME])
-            self._call_git_command_raise(["commit", "-m", "'remove lock: {}".format(lock_name)])
+            self._call_git_command_raise(["commit", "-m", "remove lock: {}".format(lock_name)])
             self._call_git_command_raise(["push"])
         except GitError as e:
             print(e, file=sys.stderr)
-            print(e.stderr, file=sys.stderr)
-        except Exception as e:
-            print(e, file=sys.stderr)
+            sys.exit(1)
 
+    # TODO: add option to add description to this operation
     def acquire(self, lock_name):
-        # TODO: start here
+        config = configparser.ConfigParser()
+        try:
+            config.read(self.path / REPO_CONFIG_FILENAME)
+            if lock_name not in config['locks']:
+                print("Lock {} doesn't exist in repository".format(lock_name), file=sys.stderr)
+                sys.exit(1)
+
+            # check if lock is in use
+            if lock_name in map(lambda x: x.name, pathlib.Path(self.path).iterdir()):
+                print("Lock {} is currently acquired."
+                        .format(lock_name), file=sys.stderr)
+                sys.exit(1)
+            else:
+                # try to acqurie the lock
+                with open(self.path / lock_name, "w") as lock_file:
+                    unique_token = str(u.uuid4())
+                    lock_file.write(unique_token)
+                    self._call_git_command_raise(["add", lock_name])
+                    self._call_git_command_raise(["commit", "-m", "acquire lock: {}".format(lock_name)])
+
+                    if self._sync_check_conflict():
+                        return unique_token
+                    else:
+                        print("Lock {} might be currently acquired."
+                              .format(lock_name), file=sys.stderr)
+                        sys.exit(1)
+        except GitError as e:
+            print(e, file=sys.stderr)
+            sys.exit(1)
+
+    def release(self, uuid):
         pass
 
+    def force_release(self, lock_name):
+        pass
 
 def env_get_git_options():
     arg_str = os.getenv("SLIG_GIT_OPTIONS")
@@ -205,7 +253,7 @@ def setup_release_subparser(subparsers):
     parser_release = subparsers.add_parser("release", help="release a lock")
     parser_release.set_defaults(action="release")
     parser_release.add_argument("uuid", help="uuid of lock or name of lock (with --force)")
-    parser_release.add_argument("--force", help="uuid of lock or name of lock (with --force)")
+    parser_release.add_argument("--force", action="store_true", help="uuid of lock or name of lock (with --force)")
 
 if __name__ == "__main__":
     parser = setup_argparse()
@@ -226,10 +274,11 @@ if __name__ == "__main__":
         repo = ClonedGitRepo(remote, git_options)
         uuid = repo.acquire(args.lock_name)
         print(uuid)  # print uuid of the lock to stdout
-    elif args.action == "release" and not args.force:
+    elif args.action == "release" and args.uuid and not args.force:
         # TODO:
         pass
-    elif args.action == "release" and args.force:
+    elif args.action == "release" and args.uuid and args.force:
+        lock_name = args.uuid
         # TODO:
         pass
     else:
