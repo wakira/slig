@@ -56,7 +56,7 @@ Upon success, uuid is printed out. The uuid is neccessary for release.
 User supplies lock's name and uuid (printed out by Acquire)
 
 ```
-clone remote to random-generated dir -> test -f XXX.lock -> fail if exist
+clone remote to random-generated dir -> test -f XXX.lock -> fail if not exist
                                         +-----------------> check content matches uid -> fail if mismatch
                                                             +--------------------------> success if match -> git rm XXX.lock -> commit -> push -> fail -> pull --rebase -> success try push again (recursive)
                                                                                                                                           |               +--------------> conflict -> impossible! setup is corrupted!

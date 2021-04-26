@@ -186,15 +186,43 @@ class ClonedGitRepo:
                         print("Lock {} might be currently acquired."
                               .format(lock_name), file=sys.stderr)
                         sys.exit(1)
+
+                # TODO: control should never reach here?
+                raise RuntimeError("Error acquiring lock")
         except GitError as e:
             print(e, file=sys.stderr)
             sys.exit(1)
 
-    def release(self, uuid):
-        pass
+    def release(self, lock_name, uuid=None):
+        config = configparser.ConfigParser()
+        try:
+            config.read(self.path / REPO_CONFIG_FILENAME)
+            if lock_name not in config['locks']:
+                print("Lock {} doesn't exist in repository".format(lock_name), file=sys.stderr)
+                sys.exit(1)
 
-    def force_release(self, lock_name):
-        pass
+            # check if lock is in use
+            if lock_name not in map(lambda x: x.name, pathlib.Path(self.path).iterdir()):
+                print("Lock {} is currently not acquired."
+                        .format(lock_name), file=sys.stderr)
+                sys.exit(1)
+            else:
+                if uuid:
+                    with open(self.path / lock_name, "r") as lock_file:
+                        old_uuid = lock_file.readline()
+                        if uuid != old_uuid:
+                            print("Cannot release lock {}, acquired by another uuid: {}".format(lock_name,uuid),
+                                  file=sys.stderr)
+                            sys.exit(1)
+                self._call_git_command_raise(["rm", lock_name])
+                self._call_git_command_raise(["commit", "-m", "release lock: {}".format(lock_name)])
+                if not self._sync_check_conflict():
+                    print("Lock {} cannot be released."
+                          .format(lock_name), file=sys.stderr)
+                    sys.exit(1)
+        except GitError as e:
+            print(e, file=sys.stderr)
+            sys.exit(1)
 
 def env_get_git_options():
     arg_str = os.getenv("SLIG_GIT_OPTIONS")
@@ -252,8 +280,11 @@ def setup_acquire_subparser(subparsers):
 def setup_release_subparser(subparsers):
     parser_release = subparsers.add_parser("release", help="release a lock")
     parser_release.set_defaults(action="release")
-    parser_release.add_argument("uuid", help="uuid of lock or name of lock (with --force)")
-    parser_release.add_argument("--force", action="store_true", help="uuid of lock or name of lock (with --force)")
+    parser_release.add_argument("lock_name", help="name of lock")
+    parser_release.add_argument("-u", "--uuid", dest="uuid",
+                                help="uuid of lock (when not using --force)")
+    parser_release.add_argument("-f", "--force", action="store_true",
+                                help="force releasing the lock without providing its uuid")
 
 if __name__ == "__main__":
     parser = setup_argparse()
@@ -274,12 +305,11 @@ if __name__ == "__main__":
         repo = ClonedGitRepo(remote, git_options)
         uuid = repo.acquire(args.lock_name)
         print(uuid)  # print uuid of the lock to stdout
-    elif args.action == "release" and args.uuid and not args.force:
-        # TODO:
-        pass
-    elif args.action == "release" and args.uuid and args.force:
-        lock_name = args.uuid
-        # TODO:
-        pass
+    elif args.action == "release" and args.lock_name and args.uuid and not args.force:
+        repo = ClonedGitRepo(remote, git_options)
+        uuid = repo.release(args.lock_name, args.uuid)
+    elif args.action == "release" and args.lock_name and not args.uuid and args.force:
+        repo = ClonedGitRepo(remote, git_options)
+        uuid = repo.release(args.lock_name)
     else:
         parser.print_help()
