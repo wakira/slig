@@ -12,14 +12,6 @@ import uuid as u
 REPO_CONFIG_FILENAME = "slig.ini"
 
 
-def file_exist(path):
-    pass
-
-
-def lock_file_check(path, uuid):
-    pass
-
-
 class GitError(RuntimeError):
     def __init__(self, returncode, stderr):
         RuntimeError.__init__(self, "Git process exited with code {}".format(returncode))
@@ -42,7 +34,6 @@ class ClonedGitRepo:
             if len(subdirs) == 1:
                 self.name = subdirs[0].name
                 self.path = pathlib.Path(parent_dir) / self.name
-                print("DEBUG:", self.path)
             else:
                 print("Error finding cloned repository in {}".format(parent_dir), file=sys.stderr)
                 sys.exit(1)
@@ -158,8 +149,7 @@ class ClonedGitRepo:
             print(e, file=sys.stderr)
             sys.exit(1)
 
-    # TODO: add option to add description to this operation
-    def acquire(self, lock_name):
+    def acquire(self, lock_name, comment=None):
         config = configparser.ConfigParser()
         try:
             config.read(self.path / REPO_CONFIG_FILENAME)
@@ -178,7 +168,10 @@ class ClonedGitRepo:
                     unique_token = str(u.uuid4())
                     lock_file.write(unique_token)
                     self._call_git_command_raise(["add", lock_name])
-                    self._call_git_command_raise(["commit", "-m", "acquire lock: {}".format(lock_name)])
+                    if comment:
+                        self._call_git_command_raise(["commit", "-m", "acquire lock: {}\n\n{}".format(lock_name, comment)])
+                    else:
+                        self._call_git_command_raise(["commit", "-m", "acquire lock: {}".format(lock_name)])
 
                     if self._sync_check_conflict():
                         return unique_token
@@ -276,6 +269,7 @@ def setup_acquire_subparser(subparsers):
     parser_acquire = subparsers.add_parser("acquire", help="acquire a lock")
     parser_acquire.set_defaults(action="acquire")
     parser_acquire.add_argument("lock_name", help="name of lock")
+    parser_acquire.add_argument("-c", "--comment", dest="comment", help="comments to write into commit message")
 
 def setup_release_subparser(subparsers):
     parser_release = subparsers.add_parser("release", help="release a lock")
@@ -303,7 +297,7 @@ if __name__ == "__main__":
         repo.remove_lock(args.lock_name)
     elif args.action == "acquire" and args.lock_name:
         repo = ClonedGitRepo(remote, git_options)
-        uuid = repo.acquire(args.lock_name)
+        uuid = repo.acquire(args.lock_name, args.comment)
         print(uuid)  # print uuid of the lock to stdout
     elif args.action == "release" and args.lock_name and args.uuid and not args.force:
         repo = ClonedGitRepo(remote, git_options)
