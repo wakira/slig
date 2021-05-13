@@ -23,23 +23,23 @@ slig repo init
 
 Register a lock that you can `acquire` later:
 ```sh
-slig locks {add | delete} [lock-name]
+slig locks {add | delete} LOCK-NAME] [{--simple | --readwrite}]
 ```
 
 Acquire a lock:
 ```sh
-slig acquire [lock-name]
+slig acquire LOCK-NAME [{--read | --write}]
 ```
 Upon success, the uuid of the lock will be print to stdout
 
 Release a lock:
 ```sh
-slig release [lock-name] --uuid [uuid]
+slig release LOCK-NAME --uuid UUID
 ```
 
 Force-release a lock without providing uuid (be careful, you can release a log that is not acquired by you!):
 ```sh
-slig release [lock-name] --force
+slig release LOCK-NAME --force
 ```
 
 ## Output
@@ -55,7 +55,9 @@ Result of normal operations (like uuid) is written to stdout
 
 Git's conflict checking mechanism assures a single lock cannot be acquired by multiple clients at the same time
 
-### Acquire
+Below is a brief introduction to how slig works.
+
+### Acquiring a simple lock
 
 User supplies lock's name
 
@@ -66,9 +68,11 @@ clone remote to random-generated dir -> check lock acquired -> fail if yes
                                                                                                                                +-----> success
 ```
 
+The lock is presented as a file named `LOCK-NAME`, it's content being `UUID`.
+
 Upon success, uuid is printed out. The uuid is neccessary for release.
 
-### Release
+### Releasing a simple lock
 
 User supplies lock's name and uuid
 
@@ -79,3 +83,9 @@ clone remote to random-generated dir -> check lock acquired -> fail if not
                                                                                                                                          |               +--------------> conflict -> impossible! setup is corrupted!
                                                                                                                                          +-----> success
 ```
+
+### Reader-writer lock
+
+The general flow is the same with a simple lock. However, read-locks are stored separately in the file
+`LOCK-NAME.read.UUID`. Write-lock is stored in `LOCK-NAME` (the same as simple lock), but if any read-locks
+are required, content `READ` is written to `LOCK-NAME` to block the acquiring of write-lock.
