@@ -149,7 +149,11 @@ class ClonedGitRepo:
             sys.exit(1)
 
     def _lock_acquired(self, lock_name):
-        return lock_name in map(lambda x: x.name, pathlib.Path(self.path).iterdir())
+        if lock_name not in map(lambda x: x.name, pathlib.Path(self.path).iterdir()):
+            return False
+        with open(self.path / lock_name, "r") as lock_file:
+            content = lock_file.readline()
+            return content != 'READ'
 
     def _num_read_lock_acquired(self, lock_name):
         return len(list(filter(lambda x: x.name.startswith(lock_name + ".read."), pathlib.Path(self.path).iterdir())))
@@ -192,15 +196,15 @@ class ClonedGitRepo:
             if lock_type == 'simple' or rw_action == 'write':
                 with open(self.path / lock_name, "w") as lock_file:
                     lock_file.write(unique_token)
-                    self._call_git_command_raise(["add", lock_name])
+                self._call_git_command_raise(["add", lock_name])
             elif lock_type == 'readwrite' and rw_action == 'read':
                 read_lock_name = lock_name + '.read.' + unique_token
                 with open(self.path / read_lock_name, "w") as read_lock_file:
                     read_lock_file.write(unique_token)
-                    self._call_git_command_raise(["add", read_lock_name])
+                self._call_git_command_raise(["add", read_lock_name])
                 with open(self.path / lock_name, "w") as lock_file:
                     lock_file.write("READ")
-                    self._call_git_command_raise(["add", lock_name])
+                self._call_git_command_raise(["add", lock_name])
             else:
                 raise RuntimeError("Impossible branch, possibly bug in coding")
 
@@ -252,7 +256,7 @@ class ClonedGitRepo:
                                 sys.exit(1)
                             release_read_lock = read_lock_name
                         elif uuid != old_uuid:
-                            print("Cannot release lock {}, acquired by another uuid: {}".format(lock_name,uuid),
+                            print("Cannot release lock {}, acquired by another uuid: {}".format(lock_name,old_uuid),
                                   file=sys.stderr)
                             sys.exit(1)
                 elif lock_type == 'readwrite':
