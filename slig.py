@@ -385,9 +385,9 @@ if __name__ == "__main__":
             print(uuid)  # print uuid of the lock to stdout
     elif args.action == "release" and args.lock_name and args.uuid and not args.force:
         repo = ClonedGitRepo(remote, git_options)
-        uuid = repo.release(args.lock_name, args.uuid)
+        repo.release(args.lock_name, args.uuid)
     elif args.action == "release" and args.lock_name and not args.uuid and args.force:
         repo = ClonedGitRepo(remote, git_options)
-        uuid = repo.release(args.lock_name)
+        repo.release(args.lock_name)
     else:
         parser.print_help()
